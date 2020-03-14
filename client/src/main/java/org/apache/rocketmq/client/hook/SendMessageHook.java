@@ -16,6 +16,10 @@
  */
 package org.apache.rocketmq.client.hook;
 
+/**
+ * 钩子函数
+ * 在消息发送和消息消费前后通过钩子函数记录消息轨迹（主要是记录消息是何时发送到哪台Broker，发送耗时多少时间，在什么地方被哪个消费者消费）
+ */
 public interface SendMessageHook {
     String hookName();
 

@@ -44,13 +44,19 @@ public class MQClientManager {
         return getOrCreateMQClientInstance(clientConfig, null);
     }
 
+    //获取或创建客户端实例
     public MQClientInstance getOrCreateMQClientInstance(final ClientConfig clientConfig, RPCHook rpcHook) {
+        // 构建客户端 ID
         String clientId = clientConfig.buildMQClientId();
+        //根据客户端 ID 获取客户端实例
         MQClientInstance instance = this.factoryTable.get(clientId);
+        // 实例如果为空就创建新的实例,并添加到实例表中
         if (null == instance) {
             instance =
                 new MQClientInstance(clientConfig.cloneClientConfig(),
                     this.factoryIndexGenerator.getAndIncrement(), clientId, rpcHook);
+            // factoryTable 集合是并发类集合，这里避免在高并发的情况下重复创建、覆盖客户端实例，
+            // 调用 putIfAbsent 方法，在添加之前判断是否存在键值对，如果存在直接返回已存在的键值对，如果不存在才会添加到集合中
             MQClientInstance prev = this.factoryTable.putIfAbsent(clientId, instance);
             if (prev != null) {
                 instance = prev;

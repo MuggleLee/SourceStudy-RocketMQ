@@ -42,27 +42,43 @@ import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
 public class MappedFile extends ReferenceResource {
+    //操作系统每页大小,默认4K
     public static final int OS_PAGE_SIZE = 1024 * 4;
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    //当前JVM实例中MappedFile虚拟内存
     private static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);
 
+    //当前JVM实例中MappedFile对象个数
     private static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);
+    //当前文件的写指针
     protected final AtomicInteger wrotePosition = new AtomicInteger(0);
+    //当前文件的提交指针
     protected final AtomicInteger committedPosition = new AtomicInteger(0);
+    //刷写到磁盘指针
     private final AtomicInteger flushedPosition = new AtomicInteger(0);
+    //文件大小
     protected int fileSize;
+    //文件通道
     protected FileChannel fileChannel;
     /**
+     * 堆外内存ByteBuffer
      * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
      */
     protected ByteBuffer writeBuffer = null;
+    //堆外内存池
     protected TransientStorePool transientStorePool = null;
+    //文件名称
     private String fileName;
+    //该文件的处理偏移量
     private long fileFromOffset;
+    //物理文件
     private File file;
+    //物理文件对应的内存映射Buffer
     private MappedByteBuffer mappedByteBuffer;
+    //文件最后一次内容写入时间
     private volatile long storeTimestamp = 0;
+    //是否是MappedFileQueue队列中第一个文件
     private boolean firstCreateInQueue = false;
 
     public MappedFile() {
@@ -200,13 +216,17 @@ public class MappedFile extends ReferenceResource {
         assert messageExt != null;
         assert cb != null;
 
+        //获得文件的写入指针
         int currentPos = this.wrotePosition.get();
 
+        // 如果写指针大于或等于文件（mappedFile）大小表明文件已写满
         if (currentPos < this.fileSize) {
+            // 通过writeBuffer.slice()创建一个与MappedFile共享的内存区,并设置position为当前指针
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
             byteBuffer.position(currentPos);
             AppendMessageResult result;
             if (messageExt instanceof MessageExtBrokerInner) {
+                // 通过回调方法写入
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBrokerInner) messageExt);
             } else if (messageExt instanceof MessageExtBatch) {
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBatch) messageExt);
@@ -269,21 +289,27 @@ public class MappedFile extends ReferenceResource {
      * @return The current flushed position
      */
     public int flush(final int flushLeastPages) {
+        //数据达到刷盘条件
         if (this.isAbleToFlush(flushLeastPages)) {
+            //加锁，同步刷盘
             if (this.hold()) {
+                //获得读指针
                 int value = getReadPosition();
 
                 try {
+                    //数据从writeBuffer提交数据到fileChannel再刷新到磁盘
                     //We only append data to fileChannel or mappedByteBuffer, never both.
                     if (writeBuffer != null || this.fileChannel.position() != 0) {
                         this.fileChannel.force(false);
                     } else {
+                        //从mmap刷新数据到磁盘
                         this.mappedByteBuffer.force();
                     }
                 } catch (Throwable e) {
                     log.error("Error occurred when force data to disk.", e);
                 }
 
+                //更新刷盘位置
                 this.flushedPosition.set(value);
                 this.release();
             } else {
@@ -299,6 +325,7 @@ public class MappedFile extends ReferenceResource {
             //no need to commit data to file channel, so just regard wrotePosition as committedPosition.
             return this.wrotePosition.get();
         }
+        // 判断是否满足提交条件
         if (this.isAbleToCommit(commitLeastPages)) {
             if (this.hold()) {
                 commit0(commitLeastPages);
@@ -309,6 +336,7 @@ public class MappedFile extends ReferenceResource {
         }
 
         // All dirty data has been committed to FileChannel.
+        // 所有数据提交后,清空缓冲区
         if (writeBuffer != null && this.transientStorePool != null && this.fileSize == this.committedPosition.get()) {
             this.transientStorePool.returnBuffer(writeBuffer);
             this.writeBuffer = null;
@@ -318,16 +346,24 @@ public class MappedFile extends ReferenceResource {
     }
 
     protected void commit0(final int commitLeastPages) {
+        //写指针
         int writePos = this.wrotePosition.get();
+        //上次提交指针
         int lastCommittedPosition = this.committedPosition.get();
 
         if (writePos - this.committedPosition.get() > 0) {
             try {
+                //复制共享内存区域
                 ByteBuffer byteBuffer = writeBuffer.slice();
+                //设置提交位置是上次提交位置
                 byteBuffer.position(lastCommittedPosition);
+                //最大提交数量
                 byteBuffer.limit(writePos);
+                //设置fileChannel位置为上次提交位置
                 this.fileChannel.position(lastCommittedPosition);
+                //将lastCommittedPosition到writePos的数据复制到FileChannel中
                 this.fileChannel.write(byteBuffer);
+                //重置提交位置
                 this.committedPosition.set(writePos);
             } catch (Throwable e) {
                 log.error("Error occurred when commit data to FileChannel.", e);
@@ -351,14 +387,20 @@ public class MappedFile extends ReferenceResource {
     }
 
     protected boolean isAbleToCommit(final int commitLeastPages) {
+        //已经刷盘指针
         int flush = this.committedPosition.get();
+        //文件写指针
         int write = this.wrotePosition.get();
 
+        //写满刷盘
         if (this.isFull()) {
             return true;
         }
 
         if (commitLeastPages > 0) {
+            // 文件内容达到commitLeastPages页数,则刷盘
+            // 比较writePosition与上一次提交的指针commitPosition的差值，
+            // 除以OS_PAGE_SIZE得到当前脏页的数量，如果大于commitLeastPages则返回true，如果commitLeastpages小于0表示只要存在脏页就提交。
             return ((write / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE)) >= commitLeastPages;
         }
 
@@ -398,13 +440,24 @@ public class MappedFile extends ReferenceResource {
         return null;
     }
 
+    /**
+     * 查找pos到当前最大可读之间的数据
+     * @param pos
+     * @return
+     */
     public SelectMappedBufferResult selectMappedBuffer(int pos) {
+        // 获得最大可读指针
         int readPosition = getReadPosition();
+        //pos小于最大可读指针,并且大于0
         if (pos < readPosition && pos >= 0) {
             if (this.hold()) {
+                //复制mappedByteBuffer读共享区
                 ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
+                //设置读指针位置
                 byteBuffer.position(pos);
+                //获得可读范围
                 int size = readPosition - pos;
+                //设置最大刻度范围
                 ByteBuffer byteBufferNew = byteBuffer.slice();
                 byteBufferNew.limit(size);
                 return new SelectMappedBufferResult(this.fileFromOffset + pos, byteBufferNew, size, this);
@@ -471,9 +524,11 @@ public class MappedFile extends ReferenceResource {
     }
 
     /**
+     * 获取当前文件最大可读指针
      * @return The max position which have valid data
      */
     public int getReadPosition() {
+        //如果writeBuffer为空,刷盘的位置就是应该等于上次commit的位置,如果为空则为mmap的写指针
         return this.writeBuffer == null ? this.wrotePosition.get() : this.committedPosition.get();
     }
 

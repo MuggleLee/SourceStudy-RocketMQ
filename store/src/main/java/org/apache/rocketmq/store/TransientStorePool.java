@@ -31,8 +31,11 @@ import sun.nio.ch.DirectBuffer;
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    // availableBuffers 个数
     private final int poolSize;
+    //每个 ByteBuffer 大小
     private final int fileSize;
+    //ByteBuffer容器。双端队列
     private final Deque<ByteBuffer> availableBuffers;
     private final MessageStoreConfig storeConfig;
 
@@ -47,6 +50,7 @@ public class TransientStorePool {
      * It's a heavy init method.
      */
     public void init() {
+        //创建poolSize个堆外内存
         for (int i = 0; i < poolSize; i++) {
             ByteBuffer byteBuffer = ByteBuffer.allocateDirect(fileSize);
 

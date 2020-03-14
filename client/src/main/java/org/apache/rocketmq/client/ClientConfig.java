@@ -34,22 +34,29 @@ import org.apache.rocketmq.remoting.protocol.LanguageCode;
  */
 public class ClientConfig {
     public static final String SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY = "com.rocketmq.sendMessageWithVIPChannel";
+    // nameserver的地址列表，用分号隔开
     private String namesrvAddr = NameServerAddressUtils.getNameServerAddresses();
+    // 客户端ip地址，有时候无法识别，需要手动配置
     private String clientIP = RemotingUtil.getLocalAddress();
+    // 客户端实例名称，客户端创建的多个 Producer、Consumer 实际是共用一个内部实例（这个实例包含网络连接、线程资源等）
     private String instanceName = System.getProperty("rocketmq.client.name", "DEFAULT");
+    // 通信层客户端处理请求的线程数
     private int clientCallbackExecutorThreads = Runtime.getRuntime().availableProcessors();
     protected String namespace;
     protected AccessChannel accessChannel = AccessChannel.LOCAL;
 
     /**
+     * 轮询nameserver的时间间隔，单位ms
      * Pulling topic information interval from the named server
      */
     private int pollNameServerInterval = 1000 * 30;
     /**
+     * 向broker发送心跳的时间间隔，单位ms
      * Heartbeat interval in microseconds with message broker
      */
     private int heartbeatBrokerInterval = 1000 * 30;
     /**
+     * 持久化 Consumer 消费进度间隔时间，单位ms
      * Offset persistent interval for consumer
      */
     private int persistConsumerOffsetInterval = 1000 * 5;
